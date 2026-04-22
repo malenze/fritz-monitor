@@ -1,4 +1,4 @@
-#!/usr/local/opt/miniconda3/bin/python3
+#!/usr/bin/env python3
 """
 FRITZ!Box Network Activity Monitor - macOS Edition
 Optimized for macOS with native notifications and sleep detection.
@@ -549,15 +549,27 @@ class KnowledgeBase:
 class LogAnalyzer:
     """Analyze logs for suspicious patterns."""
     
-    # Common FRITZ!Box log patterns
+    # FRITZ!Box log patterns (German, sourced from official event message list)
     SUSPICIOUS_KEYWORDS = [
-        'fail', 'denied', 'invalid', 'unauthorized',
-        'attack', 'intrusion', 'blocked', 'dropped',
-        'suspicious', 'malware', 'warn', 'error', 'störquelle', 'wlan-autokanal'
+        'gescheitert',            # Any failed login / connection / delivery
+        'fehlgeschlagen',         # Protocol / service / firmware failures
+        'störquelle',             # WLAN interference source detected (possible jamming)
+        'wlan-autokanal',         # WLAN auto-channel change (causes reconnections)
+        'dns-störung',            # DNS disturbance / hijacking indicator
+        'loopback gefunden',      # PPP routing loop detected
+        'schwerwiegender fehler', # Severe system error (e.g. factory-reset on import)
+        'verweigert',             # Access/login denied by remote system
     ]
-    
+
     CRITICAL_KEYWORDS = [
-        'ssh', 'rlogin', 'telnet', 'brute', 'hack'
+        'falsches kennwort',         # Brute force on admin UI / FTP
+        'kennwort falsch',           # Brute force on SMB (alternate phrasing)
+        'ungültige sitzungskennung', # Session token attack / session hijacking
+        'ungültiger wlan-schlüssel', # WiFi WPA key brute force
+        'authentifizierungsfehler',  # FRITZ! mesh product auth failure
+        'kennwort abgelehnt',        # Internet access password attempt rejected
+        'untypisch',                 # Anomalous call usage / toll fraud indicator
+        'netzwerkschleife',          # Network loop / possible DoS attack
     ]
     
     DEDUP_WINDOW_SECONDS = 300  # Suppress duplicate alerts within 5 minutes
@@ -626,7 +638,7 @@ class LogAnalyzer:
             if keyword in lower_msg:
                 return {
                     'type': 'suspicious_activity',
-                    'severity': 'high' if 'fail' in lower_msg or 'denied' in lower_msg else 'medium',
+                    'severity': 'high' if 'gescheitert' in lower_msg or 'verweigert' in lower_msg else 'medium',
                     'message': message,
                     'event_id': event.get('id'),
                     'group': event.get('group'),
@@ -732,7 +744,7 @@ class AlertHandler:
         if severity == 'critical':
             # Use alert dialog for critical issues
             return self.notifications.send_alert_dialog(
-                f"🚨 CRITICAL: {alert_type}",
+                f"🚨 CRITICAL",
                 message,
                 alert_style='critical'
             )
@@ -741,7 +753,7 @@ class AlertHandler:
             # High priority notification with warning sound
             return self.notifications.notify(
                 f"⚠️  SECURITY ALERT",
-                f"{alert_type}\n{message}",
+                f"{message}",
                 sound='warning'
             )
         
@@ -749,7 +761,7 @@ class AlertHandler:
             # Medium severity - regular notification
             return self.notifications.notify(
                 f"ℹ️  Network Activity",
-                f"{alert_type}\n{message}",
+                f"{message}",
                 sound='alert'
             )
 
@@ -760,7 +772,7 @@ class MonitoringEngine:
     def __init__(self, config: Dict):
         self.config = config
         self.fritz = FRITZBoxMonitor(
-            config.get('fritz_hostname', '192.168.0.1'),
+            config.get('fritz_hostname', '192.168.178.1'),
             config.get('fritz_username', 'logger'),
             config.get('fritz_password', '')
         )
@@ -777,7 +789,7 @@ class MonitoringEngine:
         """Start monitoring loop."""
         self.running = True
         logger.info(f"🚀 FRITZ!Box Monitor started (interval: {interval_minutes}m)")
-        logger.info(f"📍 Monitoring {self.config.get('fritz_hostname', '192.168.0.1')}")
+        logger.info(f"📍 Monitoring {self.config.get('fritz_hostname', '192.168.178.1')}")
         
         # Schedule monitoring
         schedule.every(interval_minutes).minutes.do(self._run_cycle)

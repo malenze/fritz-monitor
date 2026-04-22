@@ -1,4 +1,4 @@
-#!/usr/local/opt/miniconda3/bin/python3
+#!/usr/bin/env python3
 """
 Configuration file for FRITZ!Box Monitor
 Customize alert methods, thresholds, and device settings here.
