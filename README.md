@@ -259,3 +259,12 @@ python3 -c "import py_compile; py_compile.compile('fritz_monitor_macos.py', dora
 | `fritz_monitor.log` | `~/fritz-monitor/` | Application log |
 | `fritz_monitor.error.log` | `~/fritz-monitor/` | stderr from the LaunchAgent |
 | `com.fritz-monitor.plist` | `~/Library/LaunchAgents/` | macOS auto-start configuration |
+
+---
+
+## License & Maintenance
+
+This project is released under the [MIT License](LICENSE).
+
+This is a personal tool released as-is. Maintenance will be minimal — issues and pull requests may not be actively monitored. That said, everyone is welcome to fork the repository and adapt it freely to their own needs. The MIT license gives you full permission to use, modify, and redistribute the code, with or without attribution.
+
