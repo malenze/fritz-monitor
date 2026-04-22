@@ -1,10 +1,11 @@
-#!/usr/local/opt/miniconda3/bin/python3
+#!/usr/bin/env python3
 """
 macOS FRITZ!Box Monitor Setup Assistant
 Automatically configures LaunchAgent and all settings.
 """
 
 import os
+import shutil
 import sys
 import json
 import subprocess
@@ -80,6 +81,41 @@ Let's get started!
         self.clear()
         self.header("Step 1: Checking Prerequisites")
         
+        # Check Miniconda
+        self.section("Checking Miniconda...")
+        conda_path = shutil.which('conda')
+        if not conda_path:
+            # Fall back to common install locations
+            candidates = [
+                Path.home() / 'miniconda3' / 'bin' / 'conda',
+                Path.home() / 'opt' / 'miniconda3' / 'bin' / 'conda',
+                Path('/usr/local/opt/miniconda3/bin/conda'),
+                Path('/opt/homebrew/Caskroom/miniconda/base/bin/conda'),
+            ]
+            for candidate in candidates:
+                if candidate.exists():
+                    conda_path = str(candidate)
+                    break
+
+        if not conda_path:
+            print("✗ Miniconda is not installed!")
+            print("\n  Install it with Homebrew and then restart your terminal:")
+            print("    brew install --cask miniconda")
+            print("    conda init zsh   # or: conda init bash")
+            sys.exit(1)
+
+        # Verify the base environment is accessible
+        result = subprocess.run(
+            [conda_path, 'run', '-n', 'base', 'python', '--version'],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print(f"✓ Miniconda found: {conda_path}")
+            print(f"✓ Base environment active: {result.stdout.strip() or result.stderr.strip()}")
+        else:
+            print(f"✓ Miniconda found: {conda_path}")
+            print("⚠️  Could not activate base environment — continuing anyway.")
+
         # Create directories
         self.section("Creating directories...")
         self.monitor_dir.mkdir(parents=True, exist_ok=True)
@@ -102,7 +138,7 @@ Let's get started!
         # Check dependencies
         self.section("Checking Python packages...")
         
-        required = ['requests', 'schedule']
+        required = ['requests', 'schedule', 'defusedxml']
         missing = []
         
         for pkg in required:
@@ -127,8 +163,8 @@ Let's get started!
         self.section("Testing FRITZ!Box connection")
         
         hostname = input(
-            "FRITZ!Box hostname/IP (press Enter for 192.168.0.1): "
-        ).strip() or '192.168.0.1'
+            "FRITZ!Box hostname/IP (press Enter for 192.168.178.1): "
+        ).strip() or '192.168.178.1'
         
         print(f"\nTesting connection to {hostname}...")
         try:
@@ -285,18 +321,23 @@ Let's get started!
         
         self.section("Creating LaunchAgent configuration")
         
+        # Resolve the active python3 interpreter and its directory so the
+        # LaunchAgent runs with the same Python (e.g. a conda environment).
+        python3_path = shutil.which('python3') or sys.executable
+        python3_dir = str(Path(python3_path).parent)
+
         # Create plist content
         plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" 
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.fritz-monitor</string>
-    
+
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <string>{python3_path}</string>
         <string>{self.monitor_dir}/fritz_monitor_macos.py</string>
     </array>
     
@@ -326,7 +367,7 @@ Let's get started!
         <key>ALERT_METHOD</key>
         <string>desktop</string>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>{python3_dir}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 </dict>
 </plist>

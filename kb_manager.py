@@ -1,4 +1,4 @@
-#!/usr/local/opt/miniconda3/bin/python3
+#!/usr/bin/env python3
 """
 Network Knowledge Base Manager
 Interactive tool to register known devices and baseline traffic patterns.
