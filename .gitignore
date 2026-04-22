@@ -1,6 +1,7 @@
 __pycache__
 .vscode
 .claude
+.claudeignore
 CLAUDE.md
 *.log
 network_knowledge_base.json
