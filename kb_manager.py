@@ -50,10 +50,11 @@ class KnowledgeBaseManager:
             print("7. View suspicious IPs")
             print("8. Flag IP as suspicious")
             print("9. Auto-populate from current network (requires access)")
+            print("k. Manage keywords (suspicious / critical)")
             print("0. Exit")
-            
-            choice = input("\nSelect option (0-9): ").strip()
-            
+
+            choice = input("\nSelect option (0-9, k): ").strip()
+
             if choice == '1':
                 self.add_device_interactive()
             elif choice == '2':
@@ -72,6 +73,8 @@ class KnowledgeBaseManager:
                 self.flag_suspicious_interactive()
             elif choice == '9':
                 self.auto_populate()
+            elif choice == 'k':
+                self.manage_keywords_menu()
             elif choice == '0':
                 print("Exiting...")
                 break
@@ -220,7 +223,96 @@ class KnowledgeBaseManager:
 
         self.kb.flag_suspicious(ip)
         print(f"✓ IP flagged: {ip}")
-    
+
+    def manage_keywords_menu(self):
+        """Submenu for managing detection keywords."""
+        while True:
+            print("\n" + "="*50)
+            print("Keyword Management")
+            print("="*50)
+            print("\n1. List suspicious keywords")
+            print("2. Add suspicious keyword")
+            print("3. Delete suspicious keyword")
+            print("4. List critical keywords")
+            print("5. Add critical keyword")
+            print("6. Delete critical keyword")
+            print("0. Back")
+
+            choice = input("\nSelect option (0-6): ").strip()
+
+            if choice == '1':
+                self.list_keywords('suspicious_keywords')
+            elif choice == '2':
+                self.add_keyword_interactive('suspicious_keywords')
+            elif choice == '3':
+                self.delete_keyword_interactive('suspicious_keywords')
+            elif choice == '4':
+                self.list_keywords('critical_keywords')
+            elif choice == '5':
+                self.add_keyword_interactive('critical_keywords')
+            elif choice == '6':
+                self.delete_keyword_interactive('critical_keywords')
+            elif choice == '0':
+                break
+            else:
+                print("Invalid option")
+
+    def list_keywords(self, key: str):
+        """List keywords for the given category."""
+        label = 'Suspicious' if key == 'suspicious_keywords' else 'Critical'
+        keywords = self.kb.data.get(key, [])
+        if not keywords:
+            print(f"\nNo {label.lower()} keywords defined.")
+            return
+        print(f"\n--- {label} Keywords ({len(keywords)}) ---")
+        for i, kw in enumerate(keywords, 1):
+            print(f"  {i:2}. {kw}")
+
+    def add_keyword_interactive(self, key: str):
+        """Interactively add a keyword."""
+        label = 'suspicious' if key == 'suspicious_keywords' else 'critical'
+        print(f"\n--- Add {label.capitalize()} Keyword ---")
+        kw = input("Keyword (case-insensitive substring): ").strip().lower()
+        if not kw:
+            print("✗ Keyword cannot be empty.")
+            return
+        keywords = self.kb.data.setdefault(key, [])
+        if kw in keywords:
+            print(f"✗ '{kw}' is already in the {label} keyword list.")
+            return
+        keywords.append(kw)
+        self.kb.save()
+        print(f"✓ Added '{kw}' to {label} keywords.")
+
+    def delete_keyword_interactive(self, key: str):
+        """Interactively delete a keyword."""
+        label = 'suspicious' if key == 'suspicious_keywords' else 'critical'
+        keywords = self.kb.data.get(key, [])
+        if not keywords:
+            print(f"\nNo {label} keywords to delete.")
+            return
+        print(f"\n--- Delete {label.capitalize()} Keyword ---")
+        self.list_keywords(key)
+        choice = input("\nEnter number to delete (or keyword text, 0 to cancel): ").strip()
+        if choice == '0':
+            return
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(keywords):
+                removed = keywords.pop(idx)
+                self.kb.save()
+                print(f"✓ Removed '{removed}' from {label} keywords.")
+            else:
+                print("✗ Invalid number.")
+        else:
+            kw = choice.lower()
+            if kw in keywords:
+                keywords.remove(kw)
+                self.kb.save()
+                print(f"✓ Removed '{kw}' from {label} keywords.")
+            else:
+                print(f"✗ '{kw}' not found in {label} keywords.")
+
     def auto_populate(self):
         """Attempt to auto-populate knowledge base from network."""
         print("\n--- Auto-Populate from Network ---")

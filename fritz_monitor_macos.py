@@ -446,17 +446,47 @@ class KnowledgeBase:
     
     def _load_or_create(self) -> Dict:
         """Load existing or create new knowledge base."""
+        # FRITZ!Box log patterns (German, sourced from official event message list)
+        _default_suspicious_keywords = [
+            'gescheitert',            # Any failed login / connection / delivery
+            'fehlgeschlagen',         # Protocol / service / firmware failures
+            'störquelle',             # WLAN interference source detected (possible jamming)
+            'wlan-autokanal',         # WLAN auto-channel change (causes reconnections)
+            'dns-störung',            # DNS disturbance / hijacking indicator
+            'loopback gefunden',      # PPP routing loop detected
+            'schwerwiegender fehler', # Severe system error (e.g. factory-reset on import)
+            'verweigert',             # Access/login denied by remote system
+        ]
+        _default_critical_keywords = [
+            'falsches kennwort',         # Brute force on admin UI / FTP
+            'kennwort falsch',           # Brute force on SMB (alternate phrasing)
+            'ungültige sitzungskennung', # Session token attack / session hijacking
+            'ungültiger wlan-schlüssel', # WiFi WPA key brute force
+            'authentifizierungsfehler',  # FRITZ! mesh product auth failure
+            'kennwort abgelehnt',        # Internet access password attempt rejected
+            'untypisch',                 # Anomalous call usage / toll fraud indicator
+            'netzwerkschleife',          # Network loop / possible DoS attack
+        ]
+
         if self.db_path.exists():
             try:
                 with open(self.db_path, 'r') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                # Migrate: backfill keyword arrays added in later versions
+                if 'suspicious_keywords' not in data:
+                    data['suspicious_keywords'] = _default_suspicious_keywords
+                if 'critical_keywords' not in data:
+                    data['critical_keywords'] = _default_critical_keywords
+                return data
             except Exception as e:
                 logger.error(f"Error loading KB: {e}")
-        
+
         # Create new
         return {
             'known_devices': {},
             'baseline_traffic': {},
+            'suspicious_keywords': _default_suspicious_keywords,
+            'critical_keywords':   _default_critical_keywords,
             'whitelisted_ips': set(),
             'suspicious_ips': set(),
             'metadata': {
@@ -533,7 +563,7 @@ class KnowledgeBase:
     def is_known_mac(self, mac: str) -> bool:
         """Check if a device with this MAC address is known."""
         return any(
-            d.get('mac', '') == mac.lower()
+            d.get('mac', '').lower() == mac.lower()
             for d in self.data['known_devices'].values()
         )
 
@@ -549,33 +579,12 @@ class KnowledgeBase:
 class LogAnalyzer:
     """Analyze logs for suspicious patterns."""
     
-    # FRITZ!Box log patterns (German, sourced from official event message list)
-    SUSPICIOUS_KEYWORDS = [
-        'gescheitert',            # Any failed login / connection / delivery
-        'fehlgeschlagen',         # Protocol / service / firmware failures
-        'störquelle',             # WLAN interference source detected (possible jamming)
-        'wlan-autokanal',         # WLAN auto-channel change (causes reconnections)
-        'dns-störung',            # DNS disturbance / hijacking indicator
-        'loopback gefunden',      # PPP routing loop detected
-        'schwerwiegender fehler', # Severe system error (e.g. factory-reset on import)
-        'verweigert',             # Access/login denied by remote system
-    ]
-
-    CRITICAL_KEYWORDS = [
-        'falsches kennwort',         # Brute force on admin UI / FTP
-        'kennwort falsch',           # Brute force on SMB (alternate phrasing)
-        'ungültige sitzungskennung', # Session token attack / session hijacking
-        'ungültiger wlan-schlüssel', # WiFi WPA key brute force
-        'authentifizierungsfehler',  # FRITZ! mesh product auth failure
-        'kennwort abgelehnt',        # Internet access password attempt rejected
-        'untypisch',                 # Anomalous call usage / toll fraud indicator
-        'netzwerkschleife',          # Network loop / possible DoS attack
-    ]
-    
     DEDUP_WINDOW_SECONDS = 300  # Suppress duplicate alerts within 5 minutes
 
     def __init__(self, kb: KnowledgeBase):
         self.kb = kb
+        self.critical_keywords   = kb.data.get('critical_keywords',   [])
+        self.suspicious_keywords = kb.data.get('suspicious_keywords', [])
         self.last_analysis_time = None
         self._recent_alerts: Dict[str, datetime] = {}
 
@@ -622,7 +631,7 @@ class LogAnalyzer:
         lower_msg = message.lower()
         
         # Check for critical security issues
-        for keyword in self.CRITICAL_KEYWORDS:
+        for keyword in self.critical_keywords:
             if keyword in lower_msg:
                 return {
                     'type': 'critical_security_event',
@@ -634,7 +643,7 @@ class LogAnalyzer:
                 }
         
         # Check for general suspicious activity
-        for keyword in self.SUSPICIOUS_KEYWORDS:
+        for keyword in self.suspicious_keywords:
             if keyword in lower_msg:
                 return {
                     'type': 'suspicious_activity',
