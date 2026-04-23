@@ -136,44 +136,7 @@ k. Manage keywords (suspicious / critical)
 
 ### Option B — Edit the JSON file directly
 
-Open `~/fritz-monitor/network_knowledge_base.json` in any text editor. Example structure:
-
-```json
-{
-  "known_devices": {
-    "aa:bb:cc:dd:ee:ff": {
-      "mac": "AA:BB:CC:DD:EE:FF",
-      "ip": "192.168.178.20",
-      "hostname": "My MacBook Pro",
-      "type": "laptop",
-      "first_seen": "2026-04-22T10:00:00",
-      "last_seen": "2026-04-22T10:00:00"
-    },
-    "11:22:33:44:55:66": {
-      "mac": "11:22:33:44:55:66",
-      "ip": "192.168.178.21",
-      "hostname": "iPhone 15",
-      "type": "smartphone",
-      "first_seen": "2026-04-22T10:00:00",
-      "last_seen": "2026-04-22T10:00:00"
-    }
-  },
-  "whitelisted_ips": [
-    "8.8.8.8",
-    "8.8.4.4",
-    "1.1.1.1",
-    "192.168.178.1",
-    "224.0.0.1",
-    "255.255.255.255"
-  ],
-  "suspicious_ips": [],
-  "baseline_traffic": {},
-  "metadata": {
-    "created": "2026-04-22T10:00:00",
-    "last_updated": "2026-04-22T10:00:00"
-  }
-}
-```
+Open `~/fritz-monitor/network_knowledge_base.json` in any text editor. Example structure is provided in `network_knowledge_base_example.json`.
 
 **Notes:**
 - `known_devices` keys must be lowercase MAC addresses (colons as separators).
