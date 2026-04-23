@@ -42,6 +42,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Dedicated alert log — receives every alert processed by AlertHandler
+_alert_file_handler = logging.FileHandler('fritz_monitor_alert.log')
+_alert_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+alert_logger = logging.getLogger('fritz_monitor.alerts')
+alert_logger.setLevel(logging.INFO)
+alert_logger.addHandler(_alert_file_handler)
+alert_logger.propagate = False  # keep alert log separate from the main log
+
 
 class MacOSNotificationManager:
     """Handle macOS-native notifications via osascript."""
@@ -740,9 +748,11 @@ class AlertHandler:
             return False
     
     def _log_alert(self, alert: Dict):
-        """Log alert to file."""
+        """Log alert to main log and dedicated alert log."""
         level = logging.WARNING if alert['severity'] in ['high', 'critical'] else logging.INFO
-        logger.log(level, f"[{alert['severity'].upper()}] {alert['type']}: {alert['message']}")
+        msg = f"[{alert['severity'].upper()}] {alert['type']}: {alert['message']}"
+        logger.log(level, msg)
+        alert_logger.log(level, msg)
     
     def _send_notification(self, alert: Dict) -> bool:
         """Send macOS notification based on severity."""
