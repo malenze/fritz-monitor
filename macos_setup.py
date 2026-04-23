@@ -50,6 +50,7 @@ class MacOSSetupAssistant:
         try:
             self.step_welcome()
             self.step_prerequisites()
+            self.step_deploy()
             self.step_fritz_config()
             self.step_knowledge_base()
             self.step_launchagent()
@@ -155,10 +156,30 @@ Let's get started!
         
         input("\nPress Enter to continue...")
     
+    def step_deploy(self):
+        """Copy project *.py files into the monitor directory."""
+        self.clear()
+        self.header("Step 2: Deploy Monitor Scripts")
+
+        src_dir = Path(__file__).parent
+        py_files = sorted(src_dir.glob('*.py'))
+
+        self.section(f"Copying scripts to {self.monitor_dir}")
+
+        copied = []
+        for src in py_files:
+            dest = self.monitor_dir / src.name
+            shutil.copy2(src, dest)
+            copied.append(src.name)
+            print(f"✓ {src.name}")
+
+        print(f"\n✓ {len(copied)} file(s) copied to {self.monitor_dir}")
+        input("\nPress Enter to continue...")
+
     def step_fritz_config(self):
         """Configure FRITZ!Box access."""
         self.clear()
-        self.header("Step 2: FRITZ!Box Configuration")
+        self.header("Step 3: FRITZ!Box Configuration")
         
         self.section("Testing FRITZ!Box connection")
         
@@ -233,7 +254,7 @@ Let's get started!
     def step_knowledge_base(self):
         """Initialize knowledge base."""
         self.clear()
-        self.header("Step 3: Initialize Knowledge Base")
+        self.header("Step 4: Initialize Knowledge Base")
         
         kb_path = self.monitor_dir / 'network_knowledge_base.json'
         
@@ -337,7 +358,7 @@ Let's get started!
     def step_launchagent(self):
         """Create and load LaunchAgent."""
         self.clear()
-        self.header("Step 4: Configure Automatic Startup")
+        self.header("Step 5: Configure Automatic Startup")
         
         self.section("Creating LaunchAgent configuration")
         
