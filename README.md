@@ -257,6 +257,7 @@ python3 -c "import py_compile; py_compile.compile('fritz_monitor_macos.py', dora
 | `fritz_config.json` | `~/fritz-monitor/` | FRITZ!Box hostname + username (no password) |
 | `network_knowledge_base.json` | `~/fritz-monitor/` | Device registry and IP lists |
 | `fritz_monitor.log` | `~/fritz-monitor/` | Application log |
+| `fritz_monitor_alert.log` | `~/fritz-monitor/` | All alerts detected by the log analyser |
 | `fritz_monitor.error.log` | `~/fritz-monitor/` | stderr from the LaunchAgent |
 | `com.fritz-monitor.plist` | `~/Library/LaunchAgents/` | macOS auto-start configuration |
 
