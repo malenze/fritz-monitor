@@ -1,0 +1,58 @@
+{
+  "known_devices": {
+    "e2:db:5d:2c:ca:39": {
+      "mac": "E2:DB:5D:2C:CA:39",
+      "ip": "192.168.178.15",
+      "hostname": "fritz.repeater",
+      "type": "device",
+      "first_seen": "macos_setup.py"
+    },
+    "be:84:a2:96:bf:b6": {
+      "mac": "BE:84:A2:96:BF:B6",
+      "ip": "192.168.178.15",
+      "hostname": "fritz.repeater",
+      "type": "device",
+      "first_seen": "macos_setup.py"
+    },
+    "36:5d:c0:58:d8:68": {
+      "mac": "36:5D:C0:58:D8:68",
+      "ip": "192.168.178.1",
+      "hostname": "FritzBox",
+      "type": "device",
+      "first_seen": "macos_setup.py"
+    }
+  },
+  "baseline_traffic": {},
+  "suspicious_keywords": [
+    "gescheitert",
+    "fehlgeschlagen",
+    "störquelle",
+    "wlan-autokanal",
+    "dns-störung",
+    "loopback gefunden",
+    "schwerwiegender fehler",
+    "verweigert"
+  ],
+  "critical_keywords": [
+    "falsches kennwort",
+    "kennwort falsch",
+    "ungültige sitzungskennung",
+    "ungültiger wlan-schlüssel",
+    "authentifizierungsfehler",
+    "kennwort abgelehnt",
+    "untypisch",
+    "netzwerkschleife"
+  ],
+  "whitelisted_ips": [
+    "8.8.8.8",
+    "8.8.4.4",
+    "1.1.1.1",
+    "192.168.178.1",
+    "224.0.0.1",
+    "255.255.255.255"
+  ],
+  "suspicious_ips": [],
+  "metadata": {
+    "created": "macos_setup.py"
+  }
+}

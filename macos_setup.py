@@ -248,6 +248,26 @@ Let's get started!
         kb_data = {
             'known_devices': {},
             'baseline_traffic': {},
+            'suspicious_keywords': [
+                'gescheitert',            # Any failed login / connection / delivery
+                'fehlgeschlagen',         # Protocol / service / firmware failures
+                'störquelle',             # WLAN interference source detected (possible jamming)
+                'wlan-autokanal',         # WLAN auto-channel change (causes reconnections)
+                'dns-störung',            # DNS disturbance / hijacking indicator
+                'loopback gefunden',      # PPP routing loop detected
+                'schwerwiegender fehler', # Severe system error (e.g. factory-reset on import)
+                'verweigert',             # Access/login denied by remote system
+            ],
+            'critical_keywords': [
+                'falsches kennwort',         # Brute force on admin UI / FTP
+                'kennwort falsch',           # Brute force on SMB (alternate phrasing)
+                'ungültige sitzungskennung', # Session token attack / session hijacking
+                'ungültiger wlan-schlüssel', # WiFi WPA key brute force
+                'authentifizierungsfehler',  # FRITZ! mesh product auth failure
+                'kennwort abgelehnt',        # Internet access password attempt rejected
+                'untypisch',                 # Anomalous call usage / toll fraud indicator
+                'netzwerkschleife',          # Network loop / possible DoS attack
+            ],
             'whitelisted_ips': [
                 '8.8.8.8',           # Google DNS
                 '8.8.4.4',           # Google DNS
