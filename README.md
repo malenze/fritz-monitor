@@ -48,12 +48,13 @@ pip install requests schedule defusedxml
 python3 macos_setup.py
 ```
 
-The wizard walks through four steps:
+The wizard walks through five steps:
 
 1. **Prerequisites check** — verifies Python and required packages, creates `~/fritz-monitor/` as the working directory.
-2. **FRITZ!Box configuration** — prompts for the router's hostname/IP and admin credentials. The hostname and username are saved to `~/fritz-monitor/fritz_config.json`; the password is stored securely in the **macOS Keychain** (service `fritz-monitor`, account `fritz_password`) and never written to disk in plain text.
-3. **Knowledge base initialisation** — creates `~/fritz-monitor/network_knowledge_base.json` with default whitelisted IPs (Google/Cloudflare DNS, FRITZ!Box gateway) and optionally lets you register your known devices interactively.
-4. **LaunchAgent** — writes and loads `~/Library/LaunchAgents/com.fritz-monitor.plist` so the monitor starts automatically at login and restarts if it exits unexpectedly.
+2. **Deploy scripts** — copies all `*.py` files from the repository into `~/fritz-monitor/`.
+3. **FRITZ!Box configuration** — prompts for the router's hostname/IP and admin credentials. The hostname and username are saved to `~/fritz-monitor/fritz_config.json`; the password is stored securely in the **macOS Keychain** (service `fritz-monitor`, account `fritz_password`) and never written to disk in plain text.
+4. **Knowledge base initialisation** — creates `~/fritz-monitor/network_knowledge_base.json` with default whitelisted IPs (Google/Cloudflare DNS, FRITZ!Box gateway) and optionally lets you register your known devices interactively.
+5. **LaunchAgent** — writes and loads `~/Library/LaunchAgents/com.fritz-monitor.plist` so the monitor starts automatically at login and restarts if it exits unexpectedly.
 
 ---
 
@@ -107,6 +108,8 @@ The knowledge base (`~/fritz-monitor/network_knowledge_base.json`) stores:
 | `known_devices` | MAC → IP/hostname mapping; unknown MACs trigger an alert |
 | `whitelisted_ips` | IPs that never trigger unknown-device alerts |
 | `suspicious_ips` | IPs manually flagged for reference |
+| `suspicious_keywords` | Substring patterns that trigger a high/medium notification |
+| `critical_keywords` | Substring patterns that trigger a modal alert dialog |
 | `baseline_traffic` | Source→destination traffic patterns (reserved for future use) |
 
 ### Option A — Interactive manager
@@ -127,6 +130,7 @@ Menu options:
 7. View suspicious IPs
 8. Flag IP as suspicious
 9. Auto-populate from current network (ARP scan)
+k. Manage keywords (suspicious / critical)
 0. Exit
 ```
 
@@ -180,24 +184,41 @@ Open `~/fritz-monitor/network_knowledge_base.json` in any text editor. Example s
 
 ## Extending the Log Analyser Filters
 
-The keyword lists live in `fritz_monitor_macos.py` inside the `LogAnalyzer` class (around line 552). There are two lists, checked in order:
+Keywords are stored in `network_knowledge_base.json` under two keys and are loaded at monitor startup. There are two lists, checked in order per log message:
 
-1. **`CRITICAL_KEYWORDS`** — match triggers a modal dialog that the user must dismiss.
-2. **`SUSPICIOUS_KEYWORDS`** — match triggers a standard macOS notification with an Alarm sound. Within this category, messages containing `gescheitert` or `verweigert` are graded `high`; everything else is `medium`.
+1. **`critical_keywords`** — match triggers a modal alert dialog that the user must dismiss.
+2. **`suspicious_keywords`** — match triggers a standard macOS notification with an Alarm sound. Within this category, messages containing `gescheitert` or `verweigert` are graded `high`; everything else is `medium`.
 
 The check is a simple case-insensitive substring match against the full log message, so multi-word phrases (e.g. `'falsches kennwort'`) work as exact-phrase filters.
 
-To add a new keyword, open `fritz_monitor_macos.py` and append to the relevant list:
+### Managing keywords interactively
 
-```python
-SUSPICIOUS_KEYWORDS = [
-    'gescheitert',
-    ...
-    'mein-neues-keyword',   # ← add here
-]
+Use `kb_manager.py` and choose option `k`:
+
+```bash
+python3 kb_manager.py
+# → k. Manage keywords (suspicious / critical)
 ```
 
-To remove a keyword, simply delete its line.
+The keyword submenu lets you list, add, and delete entries for both lists. Changes are saved immediately to `network_knowledge_base.json`. **A monitor restart is required for keyword changes to take effect**, as the lists are read once at startup.
+
+### Editing the JSON file directly
+
+Open `~/fritz-monitor/network_knowledge_base.json` and edit the arrays directly:
+
+```json
+{
+  "suspicious_keywords": [
+    "gescheitert",
+    "mein-neues-keyword"
+  ],
+  "critical_keywords": [
+    "falsches kennwort"
+  ]
+}
+```
+
+Restart the monitor after saving.
 
 ### Current keyword tables
 
