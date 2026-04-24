@@ -803,6 +803,7 @@ class MonitoringEngine:
         self.running = False
         self.last_cycle_time = None
         self.cycle_count = 0
+        self._connection_failure_notified = False  # avoid repeated alerts on sustained outage
     
     def start(self, interval_minutes: int = 5):
         """Start monitoring loop."""
@@ -845,7 +846,22 @@ class MonitoringEngine:
         # Test connection to FRITZ!Box
         if not self.fritz.test_connection():
             logger.error("❌ Cannot reach FRITZ!Box, will retry next cycle")
+            if not self._connection_failure_notified:
+                hostname = self.config.get('fritz_hostname', '?')
+                MacOSNotificationManager.notify(
+                    "FRITZ!Box Unreachable",
+                    f"Cannot connect to {hostname} — monitoring paused until connection is restored.",
+                    sound='error'
+                )
+                alert_logger.log(
+                    logging.WARNING,
+                    f"[HIGH] connection_failure: Cannot reach FRITZ!Box at {hostname}"
+                )
+                self._connection_failure_notified = True
             return
+
+        # Connection (re-)established — reset the failure flag
+        self._connection_failure_notified = False
         
         # Retrieve logs
         logs = self.fritz.get_logs()
