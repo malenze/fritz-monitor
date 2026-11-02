@@ -5,11 +5,11 @@ Interactive tool to register known devices and baseline traffic patterns.
 """
 
 import ipaddress
-import json
 import re
+import subprocess
 import sys
-from pathlib import Path
-from datetime import datetime
+
+import config
 from fritz_monitor_macos import KnowledgeBase
 
 MAC_PATTERN = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
@@ -177,8 +177,6 @@ class KnowledgeBaseManager:
         if not _validate_ip(ip):
             print("✗ Invalid IP address format.")
             return
-        reason = input("Reason (e.g., 'ISP gateway', 'trusted service'): ").strip()
-
         self.kb.whitelist_ip(ip)
         print(f"✓ IP whitelisted: {ip}")
     
@@ -219,8 +217,6 @@ class KnowledgeBaseManager:
         if not _validate_ip(ip):
             print("✗ Invalid IP address format.")
             return
-        reason = input("Reason (e.g., 'brute force attempt'): ").strip()
-
         self.kb.flag_suspicious(ip)
         print(f"✓ IP flagged: {ip}")
 
@@ -318,46 +314,37 @@ class KnowledgeBaseManager:
         print("\n--- Auto-Populate from Network ---")
         print("This will scan your network for devices...")
         
+        # Try to get ARP table
         try:
-            import subprocess
-            import re
-            
-            # Try to get ARP table
-            try:
-                if sys.platform == 'darwin':
-                    result = subprocess.run(['arp', '-a'], capture_output=True, text=True)
-                    devices = self._parse_arp_macos(result.stdout)
-                elif sys.platform == 'win32':
-                    result = subprocess.run(['arp', '-a'], capture_output=True, text=True)
-                    devices = self._parse_arp_windows(result.stdout)
-                else:  # Linux
-                    result = subprocess.run(['arp', '-a'], capture_output=True, text=True)
-                    devices = self._parse_arp_linux(result.stdout)
-                
-                if devices:
-                    print(f"\nFound {len(devices)} devices on network:")
+            result = subprocess.run(['arp', '-a'], capture_output=True, text=True, check=False)
+            if sys.platform == 'darwin':
+                devices = self._parse_arp_macos(result.stdout)
+            elif sys.platform == 'win32':
+                devices = self._parse_arp_windows(result.stdout)
+            else:  # Linux
+                devices = self._parse_arp_linux(result.stdout)
+
+            if devices:
+                print(f"\nFound {len(devices)} devices on network:")
+                for device in devices:
+                    print(f"  • {device['ip']} ({device['mac']})")
+
+                add_all = input("\nAdd all discovered devices? (y/n): ").strip().lower()
+                if add_all == 'y':
                     for device in devices:
-                        print(f"  • {device['ip']} ({device['mac']})")
-                    
-                    add_all = input("\nAdd all discovered devices? (y/n): ").strip().lower()
-                    if add_all == 'y':
-                        for device in devices:
-                            self.kb.add_device(
-                                device['mac'],
-                                device['ip'],
-                                device.get('hostname', ''),
-                                'discovered'
-                            )
-                        print(f"✓ Added {len(devices)} devices")
-                else:
-                    print("No devices found on network.")
-            
-            except Exception as e:
-                print(f"Error scanning network: {e}")
-                print("Make sure you have the required network tools installed (arp, etc.)")
-        
-        except ImportError:
-            print("Network scanning requires additional packages.")
+                        self.kb.add_device(
+                            device['mac'],
+                            device['ip'],
+                            device.get('hostname', ''),
+                            'discovered'
+                        )
+                    print(f"✓ Added {len(devices)} devices")
+            else:
+                print("No devices found on network.")
+
+        except Exception as e:
+            print(f"Error scanning network: {e}")
+            print("Make sure you have the required network tools installed (arp, etc.)")
     
     def _parse_arp_macos(self, output: str) -> list:
         """Parse arp output on macOS."""
@@ -404,6 +391,9 @@ def main():
     """Main entry point."""
     manager = KnowledgeBaseManager()
     manager.interactive_menu()
+    print("\nThe running monitor loads the knowledge base only at startup.")
+    print("Restart it to apply your changes:")
+    print(f"  launchctl kickstart -k gui/$(id -u)/{config.LAUNCHAGENT_LABEL}")
 
 
 if __name__ == '__main__':

@@ -34,3 +34,9 @@ build/
 *.whl
 *.tar.gz
 *.zip
+
+# Runtime log directory (default from config.py)
+logs/
+
+# Experimental wrapper app built by build_monitor_app.py
+FritzMonitor.app/
