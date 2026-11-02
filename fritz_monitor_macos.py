@@ -4,19 +4,25 @@ FRITZ!Box Network Activity Monitor - macOS Edition
 Optimized for macOS with native notifications and sleep detection.
 """
 
+from __future__ import annotations
+
+import gzip
 import json
+import logging
 import os
+import re
+import shutil
+import subprocess
 import sys
 import time
-import logging
-import subprocess
-import re
 from datetime import datetime, timedelta
+from logging.handlers import BaseRotatingHandler
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import ClassVar
+
+import defusedxml.ElementTree as ET
 import requests
 import schedule
-import defusedxml.ElementTree as ET
 
 # Import configuration
 try:
@@ -25,28 +31,106 @@ except ImportError:
     print("Error: config.py not found. Please ensure config.py is in the same directory.")
     sys.exit(1)
 
+
+class MonthlyRotatingFileHandler(BaseRotatingHandler):
+    """Rotate log files at the start of each month.
+
+    On rollover:
+        fritz_monitor.log  ->  fritz_monitor.2026-04.log  ->  fritz_monitor.2026-04.log.gz
+
+    The archived-month suffix is the month *before* the rollover triggers.
+    After compression the intermediate renamed file is removed; only the .gz archive
+    is kept.  A fresh log file is opened for the new month automatically.
+    """
+
+    def __init__(self, filename, mode='a', encoding=None, delay=False):
+        super().__init__(filename, mode, encoding=encoding, delay=delay)
+        self._rollover_month = self._next_rollover_month()
+        # If the process restarted and the file already contains content from a
+        # previous month, trigger rotation on the very first log record written.
+        self._check_stale_on_open()
+
+    # ------------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _next_rollover_month():
+        now = datetime.now()
+        return (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
+
+    def _check_stale_on_open(self):
+        """Schedule an immediate rollover if the file's mtime pre-dates this month."""
+        base = Path(self.baseFilename)
+        if not base.exists():
+            return
+        now = datetime.now()
+        start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if datetime.fromtimestamp(base.stat().st_mtime) < start_of_month:
+            self._rollover_month = (now.year, now.month)  # fire on next record
+
+    # ------------------------------------------------------------------ handler
+
+    def shouldRollover(self, record) -> int:
+        now = datetime.now()
+        return int((now.year, now.month) >= self._rollover_month)
+
+    def doRollover(self):
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+
+        # Derive the month label for the archive (one month before the trigger)
+        yr, mo = self._rollover_month
+        prev_yr, prev_mo = (yr - 1, 12) if mo == 1 else (yr, mo - 1)
+        month_suffix = f"{prev_yr:04d}-{prev_mo:02d}"
+
+        base = Path(self.baseFilename)
+        rotated = base.parent / f"{base.stem}.{month_suffix}{base.suffix}"
+
+        if base.exists():
+            if rotated.exists():
+                rotated.unlink()
+            base.rename(rotated)
+            gz_path = Path(str(rotated) + '.gz')
+            with open(rotated, 'rb') as f_in, gzip.open(gz_path, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+            rotated.unlink()
+
+        # Advance schedule to the following month
+        self._rollover_month = (yr + 1, 1) if mo == 12 else (yr, mo + 1)
+
+        self.stream = self._open()
+
+
 # Configure logging - will be updated based on config.py settings in main()
 logging_config = {
     'level': logging.INFO,
     'format': '%(asctime)s - %(levelname)s - %(message)s',
-    'file': 'fritz_monitor.log'
+    'file': str(config.get_log_dir() / config.LOGGING_CONFIG['file'])
 }
 
 logging.basicConfig(
     level=logging_config['level'],
     format=logging_config['format'],
     handlers=[
-        logging.FileHandler(logging_config['file']),
+        MonthlyRotatingFileHandler(logging_config['file']),
 #        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
+# Dedicated alert log — receives every alert processed by AlertHandler
+_alert_file_handler = MonthlyRotatingFileHandler(str(config.get_log_dir() / 'fritz_monitor_alert.log'))
+_alert_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+alert_logger = logging.getLogger('fritz_monitor.alerts')
+alert_logger.setLevel(logging.INFO)
+alert_logger.addHandler(_alert_file_handler)
+alert_logger.propagate = False  # keep alert log separate from the main log
+
 
 class MacOSNotificationManager:
     """Handle macOS-native notifications via osascript."""
 
-    SOUNDS = {
+    SOUNDS: ClassVar[dict[str, str]] = {
         'alert': 'Submarine',
         'warning': 'Alarm',
         'error': 'Sosumi',
@@ -69,8 +153,7 @@ class MacOSNotificationManager:
         return sanitized
 
     @staticmethod
-    def notify(title: str, message: str, sound: str = 'alert',
-               action_btn: str = None, reply_btn: str = None) -> Optional[str]:
+    def notify(title: str, message: str, sound: str = 'alert') -> str | None:
         """
         Send native macOS notification.
 
@@ -78,8 +161,6 @@ class MacOSNotificationManager:
             title: Notification title
             message: Notification body
             sound: Sound name (alert, warning, error, info)
-            action_btn: Optional action button text
-            reply_btn: Optional reply button text
 
         Returns:
             User's response if clickable buttons included
@@ -99,6 +180,7 @@ class MacOSNotificationManager:
                 ['osascript', '-e', script],
                 capture_output=True,
                 text=True,
+                check=False,
                 timeout=5
             )
 
@@ -141,6 +223,7 @@ class MacOSNotificationManager:
             subprocess.run(
                 ['osascript', '-e', script],
                 capture_output=True,
+                check=False,
                 timeout=10
             )
             return True
@@ -162,6 +245,7 @@ class MacOSPowerManager:
                 ['pmset', '-g', 'systemstate'],
                 capture_output=True,
                 text=True,
+                check=False,
                 timeout=5
             )
             
@@ -229,7 +313,7 @@ class FRITZBoxMonitor:
             logger.error(f"Connection test failed: {e}")
             return False
     
-    def get_logs(self) -> List[Dict]:
+    def get_logs(self) -> list[dict]:
         """
         Retrieve device logs from FRITZ!Box in two steps:
         1. Get device log path via SOAP X_AVM-DE_GetDeviceLogPath
@@ -238,8 +322,6 @@ class FRITZBoxMonitor:
         Returns list of log events as dictionaries.
         """
         try:
-            from requests.auth import HTTPDigestAuth
-            
             # Step 1: Get the device log path
             log_path = self._get_device_log_path()
             if not log_path:
@@ -256,7 +338,7 @@ class FRITZBoxMonitor:
             logger.error(f"Error retrieving logs: {e}")
             return []
     
-    def _get_device_log_path(self) -> Optional[str]:
+    def _get_device_log_path(self) -> str | None:
         """
         Step 1: Get the device log path via SOAP.
         Returns the log path URL (e.g., /devicelog.lua?sid=...)
@@ -295,7 +377,7 @@ class FRITZBoxMonitor:
                 logger.debug(f"Got device log path: {log_path}")
                 return log_path
             elif response.status_code == 401:
-                logger.error(f"FRITZ!Box authentication failed (401). Check username/password.")
+                logger.error("FRITZ!Box authentication failed (401). Check username/password.")
                 return None
             else:
                 logger.warning(f"FRITZ!Box returned status {response.status_code}")
@@ -305,7 +387,7 @@ class FRITZBoxMonitor:
             logger.error(f"Error getting device log path: {e}")
             return None
     
-    def _parse_log_path_response(self, xml_response: str) -> Optional[str]:
+    def _parse_log_path_response(self, xml_response: str) -> str | None:
         """Extract device log path from SOAP response."""
         try:
             root = ET.fromstring(xml_response)
@@ -321,7 +403,7 @@ class FRITZBoxMonitor:
             logger.debug(f"Error parsing log path response: {e}")
             return None
     
-    def _fetch_log_xml(self, log_path: str) -> List[Dict]:
+    def _fetch_log_xml(self, log_path: str) -> list[dict]:
         """
         Step 2: Fetch the actual log XML file.
         The log_path should be something like: /devicelog.lua?sid=...
@@ -353,7 +435,7 @@ class FRITZBoxMonitor:
             logger.error(f"Error fetching log XML: {e}")
             return []
     
-    def _parse_log_xml(self, xml_content: str) -> List[Dict]:
+    def _parse_log_xml(self, xml_content: str) -> list[dict]:
         """
         Parse XML log file and extract events.
         Filters events newer than last_log_timestamp to avoid duplicates.
@@ -440,23 +522,53 @@ class FRITZBoxMonitor:
 class KnowledgeBase:
     """Knowledge base management."""
     
-    def __init__(self, db_path: str = 'network_knowledge_base.json'):
-        self.db_path = Path(db_path)
+    def __init__(self, db_path: str | Path | None = None):
+        self.db_path = Path(db_path) if db_path else config.get_kb_path()
         self.data = self._load_or_create()
     
-    def _load_or_create(self) -> Dict:
+    def _load_or_create(self) -> dict:
         """Load existing or create new knowledge base."""
+        # FRITZ!Box log patterns (German, sourced from official event message list)
+        _default_suspicious_keywords = [
+            'gescheitert',            # Any failed login / connection / delivery
+            'fehlgeschlagen',         # Protocol / service / firmware failures
+            'störquelle',             # WLAN interference source detected (possible jamming)
+            'wlan-autokanal',         # WLAN auto-channel change (causes reconnections)
+            'dns-störung',            # DNS disturbance / hijacking indicator
+            'loopback gefunden',      # PPP routing loop detected
+            'schwerwiegender fehler', # Severe system error (e.g. factory-reset on import)
+            'verweigert',             # Access/login denied by remote system
+        ]
+        _default_critical_keywords = [
+            'falsches kennwort',         # Brute force on admin UI / FTP
+            'kennwort falsch',           # Brute force on SMB (alternate phrasing)
+            'ungültige sitzungskennung', # Session token attack / session hijacking
+            'ungültiger wlan-schlüssel', # WiFi WPA key brute force
+            'authentifizierungsfehler',  # FRITZ! mesh product auth failure
+            'kennwort abgelehnt',        # Internet access password attempt rejected
+            'untypisch',                 # Anomalous call usage / toll fraud indicator
+            'netzwerkschleife',          # Network loop / possible DoS attack
+        ]
+
         if self.db_path.exists():
             try:
                 with open(self.db_path, 'r') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                # Migrate: backfill keyword arrays added in later versions
+                if 'suspicious_keywords' not in data:
+                    data['suspicious_keywords'] = _default_suspicious_keywords
+                if 'critical_keywords' not in data:
+                    data['critical_keywords'] = _default_critical_keywords
+                return data
             except Exception as e:
                 logger.error(f"Error loading KB: {e}")
-        
+
         # Create new
         return {
             'known_devices': {},
             'baseline_traffic': {},
+            'suspicious_keywords': _default_suspicious_keywords,
+            'critical_keywords':   _default_critical_keywords,
             'whitelisted_ips': set(),
             'suspicious_ips': set(),
             'metadata': {
@@ -533,7 +645,7 @@ class KnowledgeBase:
     def is_known_mac(self, mac: str) -> bool:
         """Check if a device with this MAC address is known."""
         return any(
-            d.get('mac', '') == mac.lower()
+            d.get('mac', '').lower() == mac.lower()
             for d in self.data['known_devices'].values()
         )
 
@@ -549,37 +661,16 @@ class KnowledgeBase:
 class LogAnalyzer:
     """Analyze logs for suspicious patterns."""
     
-    # FRITZ!Box log patterns (German, sourced from official event message list)
-    SUSPICIOUS_KEYWORDS = [
-        'gescheitert',            # Any failed login / connection / delivery
-        'fehlgeschlagen',         # Protocol / service / firmware failures
-        'störquelle',             # WLAN interference source detected (possible jamming)
-        'wlan-autokanal',         # WLAN auto-channel change (causes reconnections)
-        'dns-störung',            # DNS disturbance / hijacking indicator
-        'loopback gefunden',      # PPP routing loop detected
-        'schwerwiegender fehler', # Severe system error (e.g. factory-reset on import)
-        'verweigert',             # Access/login denied by remote system
-    ]
-
-    CRITICAL_KEYWORDS = [
-        'falsches kennwort',         # Brute force on admin UI / FTP
-        'kennwort falsch',           # Brute force on SMB (alternate phrasing)
-        'ungültige sitzungskennung', # Session token attack / session hijacking
-        'ungültiger wlan-schlüssel', # WiFi WPA key brute force
-        'authentifizierungsfehler',  # FRITZ! mesh product auth failure
-        'kennwort abgelehnt',        # Internet access password attempt rejected
-        'untypisch',                 # Anomalous call usage / toll fraud indicator
-        'netzwerkschleife',          # Network loop / possible DoS attack
-    ]
-    
     DEDUP_WINDOW_SECONDS = 300  # Suppress duplicate alerts within 5 minutes
 
     def __init__(self, kb: KnowledgeBase):
         self.kb = kb
+        self.critical_keywords   = kb.data.get('critical_keywords',   [])
+        self.suspicious_keywords = kb.data.get('suspicious_keywords', [])
         self.last_analysis_time = None
-        self._recent_alerts: Dict[str, datetime] = {}
+        self._recent_alerts: dict[str, datetime] = {}
 
-    def _extract_device_info(self, message: str) -> Optional[Dict]:
+    def _extract_device_info(self, message: str) -> dict | None:
         """Extract hostname and IP from WLAN connect/disconnect messages."""
         # Strip optional repeater prefix
         msg = re.sub(r'^\[fritz\.repeater\]\s*', '', message)
@@ -593,7 +684,7 @@ class LogAnalyzer:
             return {'hostname': None, 'ip': ip_match.group(1), 'mac': ip_match.group(2)}
         return None
 
-    def analyze(self, logs: List[Dict]) -> List[Dict]:
+    def analyze(self, logs: list[dict]) -> list[dict]:
         """Analyze log events and return alerts.
         
         Args:
@@ -617,12 +708,12 @@ class LogAnalyzer:
         self.last_analysis_time = datetime.now()
         return alerts
     
-    def _check_log_message(self, message: str, event: Dict) -> Optional[Dict]:
+    def _check_log_message(self, message: str, event: dict) -> dict | None:
         """Check single log message for suspicious patterns."""
         lower_msg = message.lower()
         
         # Check for critical security issues
-        for keyword in self.CRITICAL_KEYWORDS:
+        for keyword in self.critical_keywords:
             if keyword in lower_msg:
                 return {
                     'type': 'critical_security_event',
@@ -630,11 +721,11 @@ class LogAnalyzer:
                     'message': message,
                     'event_id': event.get('id'),
                     'group': event.get('group'),
-                    'timestamp': event.get('timestamp', datetime.now()).isoformat()
+                    'timestamp': event['timestamp'].isoformat()
                 }
         
         # Check for general suspicious activity
-        for keyword in self.SUSPICIOUS_KEYWORDS:
+        for keyword in self.suspicious_keywords:
             if keyword in lower_msg:
                 return {
                     'type': 'suspicious_activity',
@@ -642,7 +733,7 @@ class LogAnalyzer:
                     'message': message,
                     'event_id': event.get('id'),
                     'group': event.get('group'),
-                    'timestamp': event.get('timestamp', datetime.now()).isoformat()
+                    'timestamp': event['timestamp'].isoformat()
                 }
 
         # Check for unknown devices in WLAN connect messages
@@ -666,7 +757,7 @@ class LogAnalyzer:
                         'message': f"Unknown device connected: {label} (MAC: {mac}, IP: {ip})",
                         'event_id': event.get('id'),
                         'group': event.get('group'),
-                        'timestamp': event.get('timestamp', datetime.now()).isoformat(),
+                        'timestamp': event['timestamp'].isoformat(),
                         'ip': ip or '',
                         'mac': mac or '',
                         'hostname': hostname or ''
@@ -674,7 +765,7 @@ class LogAnalyzer:
 
         return None
     
-    def _is_duplicate(self, alert: Dict) -> bool:
+    def _is_duplicate(self, alert: dict) -> bool:
         """Check if we've seen this alert recently (within DEDUP_WINDOW_SECONDS)."""
         key = f"{alert.get('type')}:{alert.get('message', '')}"
         now = datetime.now()
@@ -700,7 +791,7 @@ class AlertHandler:
         self.alert_history = []
         self.notifications = MacOSNotificationManager()
     
-    def process_alert(self, alert: Dict) -> bool:
+    def process_alert(self, alert: dict) -> bool:
         """
         Process and deliver alert.
         
@@ -720,7 +811,7 @@ class AlertHandler:
             self._log_alert(alert)
             self.alert_history.append({
                 'alert': alert,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': alert.get('timestamp', datetime.now().isoformat())
             })
             
             # Send notification based on severity
@@ -730,21 +821,23 @@ class AlertHandler:
             logger.error(f"Error processing alert: {e}")
             return False
     
-    def _log_alert(self, alert: Dict):
-        """Log alert to file."""
+    def _log_alert(self, alert: dict):
+        """Log alert to main log and dedicated alert log."""
         level = logging.WARNING if alert['severity'] in ['high', 'critical'] else logging.INFO
-        logger.log(level, f"[{alert['severity'].upper()}] {alert['type']}: {alert['message']}")
+        event_ts = alert.get('timestamp', 'unknown')
+        msg = f"[{alert['severity'].upper()}] {alert['type']}: {alert['message']} [event: {event_ts}]"
+        logger.log(level, msg)
+        alert_logger.log(level, msg)
     
-    def _send_notification(self, alert: Dict) -> bool:
+    def _send_notification(self, alert: dict) -> bool:
         """Send macOS notification based on severity."""
         severity = alert['severity']
-        alert_type = alert['type']
         message = alert['message'][:100]  # Truncate for notification
         
         if severity == 'critical':
             # Use alert dialog for critical issues
             return self.notifications.send_alert_dialog(
-                f"🚨 CRITICAL",
+                "🚨 CRITICAL",
                 message,
                 alert_style='critical'
             )
@@ -752,7 +845,7 @@ class AlertHandler:
         elif severity == 'high':
             # High priority notification with warning sound
             return self.notifications.notify(
-                f"⚠️  SECURITY ALERT",
+                "⚠️  SECURITY ALERT",
                 f"{message}",
                 sound='warning'
             )
@@ -760,7 +853,7 @@ class AlertHandler:
         else:
             # Medium severity - regular notification
             return self.notifications.notify(
-                f"ℹ️  Network Activity",
+                "ℹ️  Network Activity",
                 f"{message}",
                 sound='alert'
             )
@@ -769,7 +862,7 @@ class AlertHandler:
 class MonitoringEngine:
     """Main monitoring orchestration."""
     
-    def __init__(self, config: Dict):
+    def __init__(self, config: dict):
         self.config = config
         self.fritz = FRITZBoxMonitor(
             config.get('fritz_hostname', '192.168.178.1'),
@@ -784,7 +877,45 @@ class MonitoringEngine:
         self.running = False
         self.last_cycle_time = None
         self.cycle_count = 0
+        self._connection_failure_notified = False  # avoid repeated alerts on sustained outage
+        self._error_log_rotated_month = None       # tracks last rotation of fritz_monitor.error.log
     
+    def _rotate_error_log_if_needed(self):
+        """Rotate fritz_monitor.error.log at the start of each month.
+
+        Because this file is the LaunchAgent's StandardErrorPath (fd 2 of this
+        process), rotating it requires both a file rename/compress step and a
+        redirect of fd 2 to the new empty file via os.dup2().
+        """
+        error_log = config.get_log_dir() / 'fritz_monitor.error.log'
+        now = datetime.now()
+        current_month = (now.year, now.month)
+
+        if self._error_log_rotated_month == current_month:
+            return  # already handled this month
+
+        if error_log.exists() and error_log.stat().st_size > 0:
+            start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            mtime = datetime.fromtimestamp(error_log.stat().st_mtime)
+            if mtime < start_of_month:
+                prev = start_of_month - timedelta(days=1)
+                month_suffix = prev.strftime('%Y-%m')
+                rotated = error_log.parent / f"{error_log.stem}.{month_suffix}{error_log.suffix}"
+                if rotated.exists():
+                    rotated.unlink()
+                error_log.rename(rotated)
+                gz_path = Path(str(rotated) + '.gz')
+                with open(rotated, 'rb') as f_in, gzip.open(gz_path, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+                rotated.unlink()
+                # Redirect fd 2 to the fresh error log so future stderr output
+                # lands in the new file rather than the renamed archive.
+                with open(error_log, 'a') as new_err:
+                    os.dup2(new_err.fileno(), sys.stderr.fileno())
+                logger.info("Rotated fritz_monitor.error.log")
+
+        self._error_log_rotated_month = current_month
+
     def start(self, interval_minutes: int = 5):
         """Start monitoring loop."""
         self.running = True
@@ -815,7 +946,10 @@ class MonitoringEngine:
         """Single monitoring cycle."""
         self.cycle_count += 1
         self.last_cycle_time = datetime.now()
-        
+
+        # Rotate fritz_monitor.error.log if it contains content from a previous month
+        self._rotate_error_log_if_needed()
+
         logger.info(f"[Cycle #{self.cycle_count}] Starting at {self.last_cycle_time.strftime('%H:%M:%S')}")
         
         # Check if system is awake
@@ -826,7 +960,22 @@ class MonitoringEngine:
         # Test connection to FRITZ!Box
         if not self.fritz.test_connection():
             logger.error("❌ Cannot reach FRITZ!Box, will retry next cycle")
+            if not self._connection_failure_notified:
+                hostname = self.config.get('fritz_hostname', '?')
+                MacOSNotificationManager.notify(
+                    "FRITZ!Box Unreachable",
+                    f"Cannot connect to {hostname} — monitoring paused until connection is restored.",
+                    sound='error'
+                )
+                alert_logger.log(
+                    logging.WARNING,
+                    f"[HIGH] connection_failure: Cannot reach FRITZ!Box at {hostname}"
+                )
+                self._connection_failure_notified = True
             return
+
+        # Connection (re-)established — reset the failure flag
+        self._connection_failure_notified = False
         
         # Retrieve logs
         logs = self.fritz.get_logs()
@@ -865,9 +1014,9 @@ def main():
     if not password:
         try:
             result = subprocess.run(
-                ['security', 'find-generic-password', '-s', 'fritz-monitor',
-                 '-a', 'fritz_password', '-w'],
-                capture_output=True, text=True, timeout=5
+                ['security', 'find-generic-password', '-s', config.KEYCHAIN_SERVICE,
+                 '-a', config.KEYCHAIN_ACCOUNT, '-w'],
+                capture_output=True, text=True, check=False, timeout=5
             )
             if result.returncode == 0:
                 password = result.stdout.strip()
@@ -894,7 +1043,7 @@ def main():
     logger.info("="*70)
     logger.info("FRITZ!Box Network Monitor - macOS Edition")
     logger.info("="*70)
-    logger.info(f"Configuration loaded from config.py")
+    logger.info("Configuration loaded from config.py")
     logger.info(f"  FRITZ!Box: {runtime_config['fritz_hostname']}")
     logger.info(f"  Username: {runtime_config['fritz_username']}")
     logger.info(f"  Interval: {runtime_config['monitoring_interval']} minutes")
@@ -910,8 +1059,8 @@ def main():
     except KeyboardInterrupt:
         logger.info("\n🛑 Monitoring interrupted by user")
         sys.exit(0)
-    except Exception as e:
-        logger.error(f"💥 Fatal error: {e}", exc_info=True)
+    except Exception:
+        logger.exception("💥 Fatal error")
         sys.exit(1)
 
 

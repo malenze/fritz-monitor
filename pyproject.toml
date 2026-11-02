@@ -1,0 +1,14 @@
+[project]
+name = "fritz-monitor"
+version = "0.1.0"
+description = "FRITZ!Box network activity monitor for macOS"
+requires-python = ">=3.10"
+dependencies = [
+    "defusedxml==0.7.1",
+    "requests==2.34.2",
+    "schedule==1.2.2",
+]
+
+[tool.ruff.lint]
+# Monitor loop must survive any router or osascript error, so blind excepts are intentional.
+extend-ignore = ["BLE001"]

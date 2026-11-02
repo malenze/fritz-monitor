@@ -5,11 +5,11 @@ Interactive tool to register known devices and baseline traffic patterns.
 """
 
 import ipaddress
-import json
 import re
+import subprocess
 import sys
-from pathlib import Path
-from datetime import datetime
+
+import config
 from fritz_monitor_macos import KnowledgeBase
 
 MAC_PATTERN = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
@@ -50,10 +50,11 @@ class KnowledgeBaseManager:
             print("7. View suspicious IPs")
             print("8. Flag IP as suspicious")
             print("9. Auto-populate from current network (requires access)")
+            print("k. Manage keywords (suspicious / critical)")
             print("0. Exit")
-            
-            choice = input("\nSelect option (0-9): ").strip()
-            
+
+            choice = input("\nSelect option (0-9, k): ").strip()
+
             if choice == '1':
                 self.add_device_interactive()
             elif choice == '2':
@@ -72,6 +73,8 @@ class KnowledgeBaseManager:
                 self.flag_suspicious_interactive()
             elif choice == '9':
                 self.auto_populate()
+            elif choice == 'k':
+                self.manage_keywords_menu()
             elif choice == '0':
                 print("Exiting...")
                 break
@@ -174,8 +177,6 @@ class KnowledgeBaseManager:
         if not _validate_ip(ip):
             print("✗ Invalid IP address format.")
             return
-        reason = input("Reason (e.g., 'ISP gateway', 'trusted service'): ").strip()
-
         self.kb.whitelist_ip(ip)
         print(f"✓ IP whitelisted: {ip}")
     
@@ -216,56 +217,134 @@ class KnowledgeBaseManager:
         if not _validate_ip(ip):
             print("✗ Invalid IP address format.")
             return
-        reason = input("Reason (e.g., 'brute force attempt'): ").strip()
-
         self.kb.flag_suspicious(ip)
         print(f"✓ IP flagged: {ip}")
-    
+
+    def manage_keywords_menu(self):
+        """Submenu for managing detection keywords."""
+        while True:
+            print("\n" + "="*50)
+            print("Keyword Management")
+            print("="*50)
+            print("\n1. List suspicious keywords")
+            print("2. Add suspicious keyword")
+            print("3. Delete suspicious keyword")
+            print("4. List critical keywords")
+            print("5. Add critical keyword")
+            print("6. Delete critical keyword")
+            print("0. Back")
+
+            choice = input("\nSelect option (0-6): ").strip()
+
+            if choice == '1':
+                self.list_keywords('suspicious_keywords')
+            elif choice == '2':
+                self.add_keyword_interactive('suspicious_keywords')
+            elif choice == '3':
+                self.delete_keyword_interactive('suspicious_keywords')
+            elif choice == '4':
+                self.list_keywords('critical_keywords')
+            elif choice == '5':
+                self.add_keyword_interactive('critical_keywords')
+            elif choice == '6':
+                self.delete_keyword_interactive('critical_keywords')
+            elif choice == '0':
+                break
+            else:
+                print("Invalid option")
+
+    def list_keywords(self, key: str):
+        """List keywords for the given category."""
+        label = 'Suspicious' if key == 'suspicious_keywords' else 'Critical'
+        keywords = self.kb.data.get(key, [])
+        if not keywords:
+            print(f"\nNo {label.lower()} keywords defined.")
+            return
+        print(f"\n--- {label} Keywords ({len(keywords)}) ---")
+        for i, kw in enumerate(keywords, 1):
+            print(f"  {i:2}. {kw}")
+
+    def add_keyword_interactive(self, key: str):
+        """Interactively add a keyword."""
+        label = 'suspicious' if key == 'suspicious_keywords' else 'critical'
+        print(f"\n--- Add {label.capitalize()} Keyword ---")
+        kw = input("Keyword (case-insensitive substring): ").strip().lower()
+        if not kw:
+            print("✗ Keyword cannot be empty.")
+            return
+        keywords = self.kb.data.setdefault(key, [])
+        if kw in keywords:
+            print(f"✗ '{kw}' is already in the {label} keyword list.")
+            return
+        keywords.append(kw)
+        self.kb.save()
+        print(f"✓ Added '{kw}' to {label} keywords.")
+
+    def delete_keyword_interactive(self, key: str):
+        """Interactively delete a keyword."""
+        label = 'suspicious' if key == 'suspicious_keywords' else 'critical'
+        keywords = self.kb.data.get(key, [])
+        if not keywords:
+            print(f"\nNo {label} keywords to delete.")
+            return
+        print(f"\n--- Delete {label.capitalize()} Keyword ---")
+        self.list_keywords(key)
+        choice = input("\nEnter number to delete (or keyword text, 0 to cancel): ").strip()
+        if choice == '0':
+            return
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(keywords):
+                removed = keywords.pop(idx)
+                self.kb.save()
+                print(f"✓ Removed '{removed}' from {label} keywords.")
+            else:
+                print("✗ Invalid number.")
+        else:
+            kw = choice.lower()
+            if kw in keywords:
+                keywords.remove(kw)
+                self.kb.save()
+                print(f"✓ Removed '{kw}' from {label} keywords.")
+            else:
+                print(f"✗ '{kw}' not found in {label} keywords.")
+
     def auto_populate(self):
         """Attempt to auto-populate knowledge base from network."""
         print("\n--- Auto-Populate from Network ---")
         print("This will scan your network for devices...")
         
+        # Try to get ARP table
         try:
-            import subprocess
-            import re
-            
-            # Try to get ARP table
-            try:
-                if sys.platform == 'darwin':
-                    result = subprocess.run(['arp', '-a'], capture_output=True, text=True)
-                    devices = self._parse_arp_macos(result.stdout)
-                elif sys.platform == 'win32':
-                    result = subprocess.run(['arp', '-a'], capture_output=True, text=True)
-                    devices = self._parse_arp_windows(result.stdout)
-                else:  # Linux
-                    result = subprocess.run(['arp', '-a'], capture_output=True, text=True)
-                    devices = self._parse_arp_linux(result.stdout)
-                
-                if devices:
-                    print(f"\nFound {len(devices)} devices on network:")
+            result = subprocess.run(['arp', '-a'], capture_output=True, text=True, check=False)
+            if sys.platform == 'darwin':
+                devices = self._parse_arp_macos(result.stdout)
+            elif sys.platform == 'win32':
+                devices = self._parse_arp_windows(result.stdout)
+            else:  # Linux
+                devices = self._parse_arp_linux(result.stdout)
+
+            if devices:
+                print(f"\nFound {len(devices)} devices on network:")
+                for device in devices:
+                    print(f"  • {device['ip']} ({device['mac']})")
+
+                add_all = input("\nAdd all discovered devices? (y/n): ").strip().lower()
+                if add_all == 'y':
                     for device in devices:
-                        print(f"  • {device['ip']} ({device['mac']})")
-                    
-                    add_all = input("\nAdd all discovered devices? (y/n): ").strip().lower()
-                    if add_all == 'y':
-                        for device in devices:
-                            self.kb.add_device(
-                                device['mac'],
-                                device['ip'],
-                                device.get('hostname', ''),
-                                'discovered'
-                            )
-                        print(f"✓ Added {len(devices)} devices")
-                else:
-                    print("No devices found on network.")
-            
-            except Exception as e:
-                print(f"Error scanning network: {e}")
-                print("Make sure you have the required network tools installed (arp, etc.)")
-        
-        except ImportError:
-            print("Network scanning requires additional packages.")
+                        self.kb.add_device(
+                            device['mac'],
+                            device['ip'],
+                            device.get('hostname', ''),
+                            'discovered'
+                        )
+                    print(f"✓ Added {len(devices)} devices")
+            else:
+                print("No devices found on network.")
+
+        except Exception as e:
+            print(f"Error scanning network: {e}")
+            print("Make sure you have the required network tools installed (arp, etc.)")
     
     def _parse_arp_macos(self, output: str) -> list:
         """Parse arp output on macOS."""
@@ -312,6 +391,9 @@ def main():
     """Main entry point."""
     manager = KnowledgeBaseManager()
     manager.interactive_menu()
+    print("\nThe running monitor loads the knowledge base only at startup.")
+    print("Restart it to apply your changes:")
+    print(f"  launchctl kickstart -k gui/$(id -u)/{config.LAUNCHAGENT_LABEL}")
 
 
 if __name__ == '__main__':

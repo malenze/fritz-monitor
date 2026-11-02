@@ -4,6 +4,29 @@ Configuration file for FRITZ!Box Monitor
 Customize alert methods, thresholds, and device settings here.
 """
 
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+# ==============================================================================
+# PROJECT PATHS AND IDENTIFIERS
+# ==============================================================================
+
+# Directory this project was checked out to. Relative paths below resolve against it.
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+# Local overrides written by macos_setup.py (hostname, username, log directory)
+LOCAL_CONFIG_FILE = PROJECT_ROOT / 'fritz_config.json'
+
+# launchd label of the LaunchAgent, shared by macos_setup.py and kb_manager.py
+LAUNCHAGENT_LABEL = 'com.fritzbox.monitor'
+
+# macOS Keychain item that holds the FRITZ!Box password
+KEYCHAIN_SERVICE = 'fritz-monitor'
+KEYCHAIN_ACCOUNT = 'fritz_password'
+
+
 # ==============================================================================
 # FRITZ!BOX SETTINGS
 # ==============================================================================
@@ -271,7 +294,11 @@ LOGGING_CONFIG = {
     # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
     'level': 'DEBUG',
     
-    # Log file location
+    # Log directory. Relative paths resolve against PROJECT_ROOT, absolute paths are used as is.
+    # Override with "log_dir" in fritz_config.json (written by macos_setup.py).
+    'dir': 'logs',
+
+    # Main log file name inside the log directory
     'file': 'fritz_monitor.log',
     
     # Maximum log file size (MB) before rotation
@@ -368,10 +395,53 @@ Quick Start - Select ONE Alert Method:
 
 
 # ==============================================================================
+# LOCAL OVERRIDES
+# ==============================================================================
+
+def _apply_local_overrides():
+    """Apply fritz_config.json (written by macos_setup.py) on top of the defaults above.
+
+    A missing or broken file is ignored so the monitor still starts with the defaults.
+    """
+    try:
+        with open(LOCAL_CONFIG_FILE) as f:
+            local = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(local, dict):
+        return
+
+    if local.get('fritz_hostname'):
+        FRITZ_CONFIG['hostname'] = local['fritz_hostname']
+    if local.get('fritz_username'):
+        FRITZ_CONFIG['username'] = local['fritz_username']
+    if local.get('log_dir'):
+        LOGGING_CONFIG['dir'] = local['log_dir']
+
+
+_apply_local_overrides()
+
+
+# ==============================================================================
 # INTEGRATION HELPERS
 # ==============================================================================
 
-def get_config(section: str = None):
+def get_log_dir() -> Path:
+    """Return the absolute log directory and create it if needed."""
+    log_dir = Path(LOGGING_CONFIG['dir']).expanduser()
+    if not log_dir.is_absolute():
+        log_dir = PROJECT_ROOT / log_dir
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
+def get_kb_path() -> Path:
+    """Return the absolute path of the knowledge base file."""
+    kb_path = Path(KNOWLEDGE_BASE_CONFIG['database_file']).expanduser()
+    return kb_path if kb_path.is_absolute() else PROJECT_ROOT / kb_path
+
+
+def get_config(section: str | None = None):
     """Get configuration dictionary.
     
     Args:
